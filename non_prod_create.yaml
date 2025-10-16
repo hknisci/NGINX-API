@@ -1,0 +1,90 @@
+- name: --- [Task] Decode base64 upstream block ---
+  become: true
+  become_method: dzdo
+  become_user: www
+  shell:
+    echo "{{ location_append }}" | base64 -d
+  register: decoded_location
+
+### TODO: Üç/beş versiyona kadar eğer API'lar güncelleniyorsa filesystem üzerinde yedek tutalım
+- name: --- [Task] Insert new application's configuration block ---
+  become: true
+  become_method: dzdo
+  become_user: www
+  ansible.builtin.copy:
+    content: "{{ decoded_location.stdout }}"
+    dest: /usr/nginx/conf.d/{{ channel }}-{{ env }}-apis/{{ api }}.conf
+    mode: 0644
+    owner: www
+    group: was
+
+### TODO: Eğer mevcuttaki bir {{ api_path }} için period/rate ayarları değişecekse mevcut satır update edilmeli
+- name: --- [Task] Insert new application's limit zone line ---
+  become: true
+  become_method: dzdo
+  become_user: www
+  ansible.builtin.lineinfile:
+    path: /usr/nginx/conf.d/limit-zones.conf
+    line: "limit_req_zone $binary_remote_addr zone={{ api_path }}_rate_limit:{{ limit_req_zone_period }} rate={{ limit_req_zone_rate }};"
+    mode: 0644
+    owner: www
+    group: was
+    create: yes
+
+- name: --- [Task] Reload Nginx ---
+  become: true
+  become_method: dzdo
+  become_user: www
+  shell: |
+    /usr/nginx/sbin/nginx -p /usr/nginx/ -c /usr/nginx/nginx.conf -e /web_log/error.log -s reload
+
+
+#- name: --- [Task] Check API existence ---
+#  ansible.builtin.stat:
+#    path: /usr/nginx/conf.d/{{ channel }}-{{ env }}-apis/{{ api }}.conf
+#  register: api_existence
+#
+#- name: --- [Task] Insert new application's configuration block for channels ---
+#  become: true
+#  become_method: dzdo
+#  become_user: www
+#  ansible.builtin.blockinfile:
+#    path: /usr/nginx/conf.d/{{ channel }}-{{ env }}-apis/{{ api }}.conf
+#    block: "{{ decoded_location.stdout }}"
+#    create: yes
+#  when: not api_existence.stat.exist
+#
+#- name: --- [Task] Replace ansible markers begin ---
+#  become: true
+#  become_method: dzdo
+#  become_user: www    
+#  ansible.builtin.replace:
+#    path: /usr/nginx/conf.d/{{ channel }}-{{ env }}-apis/{{ api }}.conf
+#    regexp: '# BEGIN ANSIBLE MANAGED BLOCK'
+#    replace: ''
+#  when: not api_existence.stat.exist
+#
+#- name: --- [Task] Replace ansible markers end ---
+#  become: true
+#  become_method: dzdo
+#  become_user: www    
+#  ansible.builtin.replace:
+#    path: /usr/nginx/conf.d/{{ channel }}-{{ env }}-apis/{{ api }}.conf
+#    regexp: '# END ANSIBLE MANAGED BLOCK'
+#    replace: ''
+#  when: api_existence.stat.exist
+#
+#- name: --- [Task] Remove file ---
+#  ansible.builtin.file:
+#    path: /usr/nginx/conf.d/{{ channel }}-{{ env }}-apis/{{ api }}.conf
+#    state: absent
+#  when: api_existence.stat.exist
+#  
+#- name: --- [Task] Insert new application's configuration block for channels ---
+#  become: true
+#  become_method: dzdo
+#  become_user: www
+#  ansible.builtin.blockinfile:
+#    path: /usr/nginx/conf.d/{{ channel }}-{{ env }}-apis/{{ api }}.conf
+#    block: "{{ decoded_location.stdout }}"
+#  when: api_existence.stat.exist
