@@ -6,7 +6,14 @@
     echo "{{ location_append }}" | base64 -d
   register: decoded_location
 
-### TODO: Üç/beş versiyona kadar eğer API'lar güncelleniyorsa filesystem üzerinde yedek tutalım
+### TODO:
+### Eğer ilk kez bir {{ api }} için dosya oluşturuyorsa dosyayı oluştaracağız
+### Eğer mevcut bir {{ api }} için tekrar istek geldiyse mevcut dosya üç versiyona kadar filesystem üzerinde yedeklenmeli
+### Yapmamız gereken yapılan talepteki {{ api }} var mı yok mu?
+### Yok ise aşağıdaki task ok'dir.
+### Var ise adam API'sinde güncelleme yapmak istiyordur
+### O yüzden /usr/nginx/conf.d/{{ channel }}-{{ env }}-apis/{{ api }}.conf dosyası yedeklenmeli ve ezmek için yine aşadağıki task kullanılabilir.
+### Yedek sayısı 3 olsun
 - name: --- [Task] Insert new application's configuration block ---
   become: true
   become_method: dzdo
@@ -37,7 +44,6 @@
   become_user: www
   shell: |
     /usr/nginx/sbin/nginx -p /usr/nginx/ -c /usr/nginx/nginx.conf -e /web_log/error.log -s reload
-
 
 #- name: --- [Task] Check API existence ---
 #  ansible.builtin.stat:
