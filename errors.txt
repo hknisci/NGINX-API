@@ -1,0 +1,4 @@
+{
+  "msg": "The task includes an option with an undefined variable. The error was: 'ansible_date_time' is undefined. 'ansible_date_time' is undefined\n\nThe error appears to be in '/runner/project/bmw_nginx/api_generator/operations/tasks/non_prod_create.yaml': line 44, column 3, but may\nbe elsewhere in the file depending on the exact syntax problem.\n\nThe offending line appears to be:\n\n# Mevcut dosyayı yedekle (varsa)\n- name: --- [Task] Backup existing API configuration ---\n  ^ here\n",
+  "_ansible_no_log": false
+}
