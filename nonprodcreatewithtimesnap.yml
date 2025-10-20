@@ -1,0 +1,111 @@
+- name: --- [Task] Decode base64 upstream block ---
+  become: true
+  become_method: dzdo
+  become_user: www
+  shell:
+    echo "{{ location_append }}" | base64 -d
+  register: decoded_location
+
+### TODO:
+### Eğer ilk kez bir {{ api }} için dosya oluşturuyorsa dosyayı oluştaracağız
+### Eğer mevcut bir {{ api }} için tekrar istek geldiyse mevcut dosya üç versiyona kadar filesystem üzerinde yedeklenmeli
+### Yapmamız gereken yapılan talepteki {{ api }} var mı yok mu?
+### Yok ise aşağıdaki task ok'dir.
+### Var ise adam API'sinde güncelleme yapmak istiyordur
+### O yüzden /usr/nginx/conf.d/{{ channel }}-{{ env }}-apis/{{ api }}.conf dosyası yedeklenmeli ve ezmek için yine aşadağıki task kullanılabilir.
+### Yedek sayısı 3 olsun
+
+# TODO SECTION 1: API dosya yönetimi ve yedekleme
+- name: --- [Task] Check if API configuration file exists ---
+  ansible.builtin.stat:
+    path: /usr/nginx/conf.d/{{ channel }}-{{ env }}-apis/{{ api }}.conf
+  register: api_config_exists
+
+- name: --- [Task] Get list of existing backup files ---
+  ansible.builtin.find:
+    paths: /usr/nginx/conf.d/{{ channel }}-{{ env }}-apis/
+    patterns: "{{ api }}.conf.backup.*"
+    use_regex: no
+  register: existing_backups
+  when: api_config_exists.stat.exists
+
+- name: --- [Task] Remove oldest backups if more than 2 exist (to keep max 3) ---
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ (existing_backups.files | sort(attribute='mtime'))[:-2] }}"
+  when: 
+    - api_config_exists.stat.exists
+    - existing_backups.files is defined
+    - (existing_backups.files | length) >= 3
+  become: true
+  become_method: dzdo
+  become_user: www
+
+- name: --- [Task] Get current timestamp ---
+  ansible.builtin.command: date +%s
+  register: timestamp
+  changed_when: false
+
+- name: --- [Task] Create backup of existing configuration ---
+  ansible.builtin.copy:
+    src: /usr/nginx/conf.d/{{ channel }}-{{ env }}-apis/{{ api }}.conf
+    dest: /usr/nginx/conf.d/{{ channel }}-{{ env }}-apis/{{ api }}.conf.backup.{{ timestamp.stdout }}
+    remote_src: yes
+    mode: 0644
+    owner: www
+    group: was
+  when: api_config_exists.stat.exists
+  become: true
+  become_method: dzdo
+  become_user: www
+
+- name: --- [Task] Insert new application's configuration block ---
+  become: true
+  become_method: dzdo
+  become_user: www
+  ansible.builtin.copy:
+    content: "{{ decoded_location.stdout }}"
+    dest: /usr/nginx/conf.d/{{ channel }}-{{ env }}-apis/{{ api }}.conf
+    mode: 0644
+    owner: www
+    group: was
+
+### TODO: Eğer mevcuttaki bir {{ api_path }} için period/rate ayarları değişecekse mevcut satır update edilmeli
+
+# TODO SECTION 2: Rate limit güncelleme
+- name: --- [Task] Check if rate limit for api_path already exists ---
+  ansible.builtin.lineinfile:
+    path: /usr/nginx/conf.d/limit-zones.conf
+    regexp: '^limit_req_zone \$binary_remote_addr zone={{ api_path }}_rate_limit:'
+    state: absent
+  check_mode: yes
+  register: rate_limit_exists
+  become: true
+  become_method: dzdo
+  become_user: www
+
+- name: --- [Task] Log if updating existing rate limit ---
+  ansible.builtin.debug:
+    msg: "Rate limit for {{ api_path }} exists and will be updated with new values - period: {{ limit_req_zone_period }}, rate: {{ limit_req_zone_rate }}"
+  when: rate_limit_exists.found
+
+- name: --- [Task] Insert new application's limit zone line ---
+  become: true
+  become_method: dzdo
+  become_user: www
+  ansible.builtin.lineinfile:
+    path: /usr/nginx/conf.d/limit-zones.conf
+    regexp: '^limit_req_zone \$binary_remote_addr zone={{ api_path }}_rate_limit:.*$'
+    line: "limit_req_zone $binary_remote_addr zone={{ api_path }}_rate_limit:{{ limit_req_zone_period }} rate={{ limit_req_zone_rate }};"
+    mode: 0644
+    owner: www
+    group: was
+    create: yes
+
+- name: --- [Task] Reload Nginx ---
+  become: true
+  become_method: dzdo
+  become_user: www
+  shell: |
+    /usr/nginx/sbin/nginx -p /usr/nginx/ -c /usr/nginx/nginx.conf -e /web_log/error.log -s reload
