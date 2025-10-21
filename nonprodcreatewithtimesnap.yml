@@ -112,8 +112,8 @@
   register: nginx_test
   ignore_errors: yes
 
-# Test başarısızsa geri al
-- name: --- [Task] Rollback configuration if test fails ---
+# Test başarısız ise - MEVCUT API için geri al
+- name: --- [Task] Rollback existing API configuration if test fails ---
   block:
     - name: --- [Task] Restore backup configuration ---
       become: true
@@ -127,12 +127,39 @@
         owner: www
         group: was
     
-    - name: --- [Task] Fail with error message ---
+    - name: --- [Task] Fail with error message for existing API ---
       ansible.builtin.fail:
-        msg: "Nginx configuration test failed. Configuration has been rolled back."
+        msg: "Nginx configuration test failed for existing API. Configuration has been rolled back to previous version."
   when: 
     - nginx_test.rc != 0
     - api_file_status.stat.exists
+
+# Test başarısız ise - YENİ API için temizle
+- name: --- [Task] Remove new API configuration if test fails ---
+  block:
+    - name: --- [Task] Remove failed new configuration file ---
+      become: true
+      become_method: dzdo
+      become_user: www
+      ansible.builtin.file:
+        path: /usr/nginx/conf.d/{{ channel }}-{{ env }}-apis/{{ api }}.conf
+        state: absent
+    
+    - name: --- [Task] Remove rate limit entry for failed new API ---
+      become: true
+      become_method: dzdo
+      become_user: www
+      ansible.builtin.lineinfile:
+        path: /usr/nginx/conf.d/limit-zones.conf
+        regexp: '^limit_req_zone \$binary_remote_addr zone={{ limit_req_zone_name }}_rate_limit:.*'
+        state: absent
+    
+    - name: --- [Task] Fail with error message for new API ---
+      ansible.builtin.fail:
+        msg: "Nginx configuration test failed for new API. Configuration file and rate limit entry have been removed."
+  when: 
+    - nginx_test.rc != 0
+    - not api_file_status.stat.exists
 
 # Test başarılıysa Nginx'i reload et
 - name: --- [Task] Reload Nginx ---
@@ -141,65 +168,84 @@
   become_user: www
   shell: |
     /usr/nginx/sbin/nginx -p /usr/nginx/ -c /usr/nginx/nginx.conf -e /web_log/error.log -s reload
+  register: nginx_reload
   when: nginx_test.rc == 0
+
+# Reload başarısız ise - MEVCUT API için geri al
+- name: --- [Task] Rollback if reload fails for existing API ---
+  block:
+    - name: --- [Task] Restore backup after failed reload ---
+      become: true
+      become_method: dzdo
+      become_user: www
+      ansible.builtin.copy:
+        src: /usr/nginx/conf.d/{{ channel }}-{{ env }}-apis/{{ api }}.conf.backup.{{ timestamp.stdout }}
+        dest: /usr/nginx/conf.d/{{ channel }}-{{ env }}-apis/{{ api }}.conf
+        remote_src: yes
+        mode: 0644
+        owner: www
+        group: was
+    
+    - name: --- [Task] Force reload with restored configuration ---
+      become: true
+      become_method: dzdo
+      become_user: www
+      shell: |
+        /usr/nginx/sbin/nginx -p /usr/nginx/ -c /usr/nginx/nginx.conf -e /web_log/error.log -s reload
+    
+    - name: --- [Task] Fail with reload error for existing API ---
+      ansible.builtin.fail:
+        msg: "Nginx reload failed after configuration update. Previous configuration has been restored."
+  when:
+    - nginx_test.rc == 0
+    - nginx_reload.rc != 0
+    - api_file_status.stat.exists
+
+# Reload başarısız ise - YENİ API için temizle
+- name: --- [Task] Clean up if reload fails for new API ---
+  block:
+    - name: --- [Task] Remove new configuration after failed reload ---
+      become: true
+      become_method: dzdo
+      become_user: www
+      ansible.builtin.file:
+        path: /usr/nginx/conf.d/{{ channel }}-{{ env }}-apis/{{ api }}.conf
+        state: absent
+    
+    - name: --- [Task] Remove rate limit for failed new API ---
+      become: true
+      become_method: dzdo
+      become_user: www
+      ansible.builtin.lineinfile:
+        path: /usr/nginx/conf.d/limit-zones.conf
+        regexp: '^limit_req_zone \$binary_remote_addr zone={{ limit_req_zone_name }}_rate_limit:.*'
+        state: absent
+    
+    - name: --- [Task] Force reload after cleanup ---
+      become: true
+      become_method: dzdo
+      become_user: www
+      shell: |
+        /usr/nginx/sbin/nginx -p /usr/nginx/ -c /usr/nginx/nginx.conf -e /web_log/error.log -s reload
+    
+    - name: --- [Task] Fail with reload error for new API ---
+      ansible.builtin.fail:
+        msg: "Nginx reload failed for new API configuration. Configuration file and rate limit have been removed."
+  when:
+    - nginx_test.rc == 0
+    - nginx_reload.rc != 0
+    - not api_file_status.stat.exists
 
 # Başarılı deployment mesajı
 - name: --- [Task] Display deployment status ---
   ansible.builtin.debug:
     msg: 
-      - "API Configuration Status:"
+      - "API Configuration Status: SUCCESS"
       - "  API: {{ api }}"
       - "  Environment: {{ env }}"
       - "  Channel: {{ channel }}"
       - "  Configuration: {{ 'Updated' if api_file_status.stat.exists else 'Created' }}"
-      - "  Rate Limit: {{ limit_req_zone_rate }} (Period: {{ limit_req_zone_memory_size }})"
-
-#- name: --- [Task] Check API existence ---
-#  ansible.builtin.stat:
-#    path: /usr/nginx/conf.d/{{ channel }}-{{ env }}-apis/{{ api }}.conf
-#  register: api_existence
-#
-#- name: --- [Task] Insert new application's configuration block for channels ---
-#  become: true
-#  become_method: dzdo
-#  become_user: www
-#  ansible.builtin.blockinfile:
-#    path: /usr/nginx/conf.d/{{ channel }}-{{ env }}-apis/{{ api }}.conf
-#    block: "{{ decoded_location.stdout }}"
-#    create: yes
-#  when: not api_existence.stat.exist
-#
-#- name: --- [Task] Replace ansible markers begin ---
-#  become: true
-#  become_method: dzdo
-#  become_user: www    
-#  ansible.builtin.replace:
-#    path: /usr/nginx/conf.d/{{ channel }}-{{ env }}-apis/{{ api }}.conf
-#    regexp: '# BEGIN ANSIBLE MANAGED BLOCK'
-#    replace: ''
-#  when: not api_existence.stat.exist
-#
-#- name: --- [Task] Replace ansible markers end ---
-#  become: true
-#  become_method: dzdo
-#  become_user: www    
-#  ansible.builtin.replace:
-#    path: /usr/nginx/conf.d/{{ channel }}-{{ env }}-apis/{{ api }}.conf
-#    regexp: '# END ANSIBLE MANAGED BLOCK'
-#    replace: ''
-#  when: api_existence.stat.exist
-#
-#- name: --- [Task] Remove file ---
-#  ansible.builtin.file:
-#    path: /usr/nginx/conf.d/{{ channel }}-{{ env }}-apis/{{ api }}.conf
-#    state: absent
-#  when: api_existence.stat.exist
-#  
-#- name: --- [Task] Insert new application's configuration block for channels ---
-#  become: true
-#  become_method: dzdo
-#  become_user: www
-#  ansible.builtin.blockinfile:
-#    path: /usr/nginx/conf.d/{{ channel }}-{{ env }}-apis/{{ api }}.conf
-#    block: "{{ decoded_location.stdout }}"
-#  when: api_existence.stat.exist
+      - "  Rate Limit: {{ limit_req_zone_rate }} (Memory: {{ limit_req_zone_memory_size }})"
+  when: 
+    - nginx_test.rc == 0
+    - nginx_reload.rc == 0
