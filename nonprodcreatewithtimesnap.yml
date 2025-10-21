@@ -73,22 +73,8 @@
 
 ### TODO: Eğer mevcuttaki bir {{ limit_req_zone_name }} için period/rate ayarları değişecekse mevcut satır update edilmeli
 
-# Rate limit konfigürasyonunun mevcut halini oku
-- name: --- [Task] Check existing rate limit configuration ---
-  ansible.builtin.lineinfile:
-    path: /usr/nginx/conf.d/limit-zones.conf
-    regexp: '^limit_req_zone \$binary_remote_addr zone={{ limit_req_zone_name }}_rate_limit:.*'
-    state: absent
-  check_mode: yes
-  register: rate_limit_check
-
-# Mevcut rate limit satırını logla (değişiklik takibi için)
-- name: --- [Task] Log rate limit change if exists ---
-  ansible.builtin.debug:
-    msg: "Updating existing rate limit for {{ limit_req_zone_name }}: Previous configuration will be replaced"
-  when: rate_limit_check.found
-
 # Rate limit konfigürasyonunu ekle veya güncelle
+# Not: lineinfile regexp parametresi ile zaten mevcut satırı bulup güncelliyor
 - name: --- [Task] Insert or update application's limit zone line ---
   become: true
   become_method: dzdo
@@ -101,6 +87,16 @@
     owner: www
     group: was
     create: yes
+  register: rate_limit_result
+
+# Değişiklik olduysa logla
+- name: --- [Task] Log rate limit change ---
+  ansible.builtin.debug:
+    msg: 
+      - "Rate limit configuration: {{ 'Updated' if rate_limit_result.changed else 'No change needed' }}"
+      - "Zone: {{ limit_req_zone_name }}_rate_limit"
+      - "Memory: {{ limit_req_zone_memory_size }}"
+      - "Rate: {{ limit_req_zone_rate }}"
 
 # Nginx konfigürasyonunu test et
 - name: --- [Task] Test Nginx configuration ---
@@ -126,6 +122,16 @@
         mode: 0644
         owner: www
         group: was
+    
+    - name: --- [Task] Remove failed rate limit entry ---
+      become: true
+      become_method: dzdo
+      become_user: www
+      ansible.builtin.lineinfile:
+        path: /usr/nginx/conf.d/limit-zones.conf
+        regexp: '^limit_req_zone \$binary_remote_addr zone={{ limit_req_zone_name }}_rate_limit:.*'
+        state: absent
+      when: rate_limit_result.changed
     
     - name: --- [Task] Fail with error message for existing API ---
       ansible.builtin.fail:
@@ -185,6 +191,16 @@
         mode: 0644
         owner: www
         group: was
+    
+    - name: --- [Task] Remove failed rate limit if it was added ---
+      become: true
+      become_method: dzdo
+      become_user: www
+      ansible.builtin.lineinfile:
+        path: /usr/nginx/conf.d/limit-zones.conf
+        regexp: '^limit_req_zone \$binary_remote_addr zone={{ limit_req_zone_name }}_rate_limit:.*'
+        state: absent
+      when: rate_limit_result.changed
     
     - name: --- [Task] Force reload with restored configuration ---
       become: true
