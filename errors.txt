@@ -1,3 +1,34 @@
 TASK [operations : --- [Task] Remove oldest backup if more than 3 exist ---] ***
 changed: [GBNGWD02] => (item={'path': '/usr/nginx/conf.d/mblcustomers-dev-apis/GAR.CST.REST.CURRENCY-MANAGEMENT_CURRENCY-MNGMNT-SAUTH-CH_V0.conf.backup.1761050130', 'mode': '0644', 'isdir': False, 'ischr': False, 'isblk': False, 'isreg': True, 'isfifo': False, 'islnk': False, 'issock': False, 'uid': 213, 'gid': 205, 'size': 2851, 'inode': 12583082, 'dev': 64778, 'nlink': 1, 'atime': 1761048128.594827, 'mtime': 1761048125.7265463, 'ctime': 1761050131.4157698, 'gr_name': 'was', 'pw_name': 'www', 'wusr': True, 'rusr': True, 'xusr': False, 'wgrp': False, 'rgrp': True, 'xgrp': False, 'woth': False, 'roth': True, 'xoth': False, 'isuid': False, 'isgid': False})
 failed: [GBNGWD01] (item={'path': '/usr/nginx/conf.d/mblcustomers-dev-apis/GAR.CST.REST.CURRENCY-MANAGEMENT_CURRENCY-MNGMNT-SAUTH-CH_V0.conf.backup.1761049022', 'mode': '0644', 'isdir': False, 'ischr': False, 'isblk': False, 'isreg': True, 'isfifo': False, 'islnk': False, 'issock': False, 'uid': 213, 'gid': 205, 'size': 2851, 'inode': 483, 'dev': 64775, 'nlink': 1, 'atime': 1761048149.9392571, 'mtime': 1761048125.8049614, 'ctime': 1761049023.6453614, 'gr_name': 'was', 'pw_name': 'www', 'wusr': True, 'rusr': True, 'xusr': False, 'wgrp': False, 'rgrp': True, 'xgrp': False, 'woth': False, 'roth': True, 'xoth': False, 'isuid': False, 'isgid': False}) => {"ansible_loop_var": "item", "changed": false, "gid": 205, "group": "was", "item": {"atime": 1761048149.9392571, "ctime": 1761049023.6453614, "dev": 64775, "gid": 205, "gr_name": "was", "inode": 483, "isblk": false, "ischr": false, "isdir": false, "isfifo": false, "isgid": false, "islnk": false, "isreg": true, "issock": false, "isuid": false, "mode": "0644…
+
+
+# Mevcut dosyanın yedeklerini kontrol et ve say
+- name: --- [Task] Find existing backup files ---
+  ansible.builtin.find:
+    paths: /usr/nginx/conf.d/{{ channel }}-{{ env }}-apis/
+    patterns: "{{ api }}.conf.backup.*"
+  register: backup_files
+  when: api_file_status.stat.exists
+
+# Silinecek dosyaları belirle
+- name: --- [Task] Determine files to delete ---
+  ansible.builtin.set_fact:
+    files_to_delete: "{{ (backup_files.files | default([]) | sort(attribute='mtime'))[:-2] }}"
+  when:
+    - api_file_status.stat.exists
+    - backup_files.files is defined
+    - (backup_files.files | length) > 2
+
+# En eski yedekleri sil (3'ten fazla varsa)
+- name: --- [Task] Remove oldest backups keeping only 2 (plus new one will be 3) ---
+  become: true
+  become_method: dzdo
+  become_user: www
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ files_to_delete | default([]) }}"
+  when: 
+    - files_to_delete is defined
+    - files_to_delete | length > 0
